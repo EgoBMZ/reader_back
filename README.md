@@ -55,18 +55,40 @@ El backend expone una API REST con los siguientes endpoints principales:
 * Python 3.9+
 * Java Development Kit (JDK) 17+ (instalado en tu sistema)
 
-### Ejecución
-1. Navega a la carpeta del backend:
+### Instalación y Configuración
+
+1. **Navega a la carpeta del backend**:
    ```bash
    cd backend
    ```
-2. Activa el entorno virtual:
+2. **Crea el entorno virtual de Python**:
    ```bash
-   source .venv/bin/activate
+   python3 -m venv .venv
    ```
-3. Ejecuta el servidor:
+3. **Activa el entorno virtual**:
+   - En macOS / Linux:
+     ```bash
+     source .venv/bin/activate
+     ```
+   - En Windows (PowerShell):
+     ```bash
+     .venv\Scripts\Activate.ps1
+     ```
+4. **Instala las dependencias**:
    ```bash
+   pip install -r requirements.txt
+   ```
+
+### Ejecución del Servidor
+
+1. Con el entorno virtual activo, agrega la ruta del JDK de Java a tu variable `PATH` (necesario si tu sistema no reconoce `java` de forma automática) e inicia el servidor con `uvicorn`:
+   ```bash
+   # En macOS (con Homebrew JDK 17):
    export PATH="/opt/homebrew/opt/openjdk@17/bin:$PATH"
    uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
    ```
-   *El backend estará disponible en `http://localhost:8000` y la documentación interactiva en `http://localhost:8000/docs`.*
+   *(Si Java ya está configurado de manera global en tu sistema, basta con ejecutar `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`)*
+
+2. El backend estará disponible en **`http://localhost:8000`**.
+3. Puedes probar la API interactivamente ingresando a: **`http://localhost:8000/docs`**.
+

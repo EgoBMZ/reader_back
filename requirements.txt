@@ -1,0 +1,5 @@
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+python-multipart>=0.0.6
+opendataloader-pdf>=0.1.0
+reportlab>=4.0.0

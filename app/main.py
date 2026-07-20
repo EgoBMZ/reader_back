@@ -161,8 +161,9 @@ async def extract_pdf(
         )
 
     # 3. Parsear PDF
+    from fastapi.concurrency import run_in_threadpool
     try:
-        result = parser_service.parse(temp_path)
+        result = await run_in_threadpool(parser_service.parse, temp_path)
         if not result.get("success"):
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -5,6 +5,8 @@ import logging
 from typing import Dict, Any, List
 import opendataloader_pdf
 
+from app.services.ocr_service import OCRService
+
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -77,10 +79,38 @@ class PDFParserService:
             # Process the items in JSON to update image paths to web URLs
             # Typically OpenDataLoader outputs a list of document elements (paragraphs, tables, images, etc.)
             processed_data = self._process_extracted_data(data, task_id)
+
+            # --- OCR PIPELINE ---
+            # Extract the actual document elements list from the processed data
+            elements = []
+            is_dict_root = isinstance(processed_data, dict)
+            if is_dict_root:
+                elements = processed_data.get("kids", [])
+            elif isinstance(processed_data, list):
+                elements = processed_data
+
+            # Detect if the document is scanned (image-based PDF)
+            is_scanned = OCRService.is_scanned_document(elements)
             
+            if is_scanned:
+                logger.info("Scanned PDF detected — running Tesseract OCR on images...")
+                enriched_elements = OCRService.apply_ocr_to_images(
+                    elements=elements,
+                    static_dir=self.static_dir,
+                )
+                # Replace the elements in the processed data
+                if is_dict_root:
+                    processed_data["kids"] = enriched_elements
+                else:
+                    processed_data = enriched_elements
+            else:
+                logger.info("Digital PDF detected — skipping OCR.")
+            # --- END OCR PIPELINE ---
+
             return {
                 "success": True,
                 "task_id": task_id,
+                "is_scanned": is_scanned,
                 "document": processed_data
             }
             

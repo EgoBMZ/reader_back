@@ -4,3 +4,8 @@ __pycache__/
 app/uploads/
 app/static/images/
 .DS_Store
+
+# Variables de entorno y credenciales (nunca subir al repo)
+.env
+*serviceAccount*.json
+firebase-adminsdk*.json

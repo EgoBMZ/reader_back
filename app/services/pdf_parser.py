@@ -107,10 +107,31 @@ class PDFParserService:
                 logger.info("Digital PDF detected — skipping OCR.")
             # --- END OCR PIPELINE ---
 
+            # Extract cover image (first page) using PyMuPDF
+            cover_filename = f"{task_id}.png"
+            covers_dir = os.path.join(self.static_dir, "covers")
+            os.makedirs(covers_dir, exist_ok=True)
+            cover_path = os.path.join(covers_dir, cover_filename)
+            cover_url = None
+            try:
+                import fitz  # PyMuPDF
+                doc = fitz.open(pdf_file_path)
+                if len(doc) > 0:
+                    page = doc[0]
+                    # Render page to an image (PNG)
+                    pix = page.get_pixmap(dpi=150)
+                    pix.save(cover_path)
+                    cover_url = f"/static/covers/{cover_filename}"
+                doc.close()
+                logger.info(f"Cover extracted successfully for task {task_id}: {cover_url}")
+            except Exception as cover_err:
+                logger.error(f"Error extracting PDF cover: {cover_err}")
+
             return {
                 "success": True,
                 "task_id": task_id,
                 "is_scanned": is_scanned,
+                "cover_url": cover_url,
                 "document": processed_data
             }
             

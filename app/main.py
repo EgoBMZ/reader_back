@@ -8,8 +8,9 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+import json
 import firebase_admin
-from firebase_admin import credentials
+from firebase_admin import credentials, firestore, storage
 
 from app.services.pdf_parser import PDFParserService
 from app.firebase_auth import get_current_user, FirebaseUser
@@ -19,9 +20,10 @@ from app.firebase_auth import get_current_user, FirebaseUser
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
 FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID", "reader-egobmz")
+FIREBASE_STORAGE_BUCKET = os.getenv("FIREBASE_STORAGE_BUCKET", f"{FIREBASE_PROJECT_ID}.appspot.com")
 ALLOWED_ORIGINS = [
     o.strip()
-    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3001,http://localhost:3000").split(",")
+    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3001,http://localhost:3000,*").split(",")
     if o.strip()
 ]
 
@@ -38,30 +40,42 @@ UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 def _init_firebase():
     """
     Inicializa Firebase Admin SDK.
-
-    Estrategia (en orden de prioridad):
-    1. Si existe GOOGLE_APPLICATION_CREDENTIALS en el env → usa ese service account
-    2. Si no → inicializa solo con project_id (válido para verificar tokens en dev)
     """
     if firebase_admin._apps:
         return  # ya inicializado (útil en hot-reload)
 
+    # 1. Si hay JSON directo en env (útil para Render)
+    cred_json_str = os.getenv("FIREBASE_CREDENTIALS_JSON")
     sa_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    if sa_path and Path(sa_path).exists():
+    
+    options = {
+        "projectId": FIREBASE_PROJECT_ID,
+        "storageBucket": FIREBASE_STORAGE_BUCKET
+    }
+
+    if cred_json_str:
+        try:
+            cred_dict = json.loads(cred_json_str)
+            cred = credentials.Certificate(cred_dict)
+            logger.info("Firebase Admin: usando credenciales desde FIREBASE_CREDENTIALS_JSON")
+        except json.JSONDecodeError:
+            logger.error("El contenido de FIREBASE_CREDENTIALS_JSON no es un JSON válido.")
+            cred = None
+    elif sa_path and Path(sa_path).exists():
         cred = credentials.Certificate(sa_path)
         logger.info(f"Firebase Admin: usando service account desde {sa_path}")
     else:
         cred = credentials.ApplicationDefault() if os.getenv("GOOGLE_CLOUD_PROJECT") else None
         logger.info(
-            f"Firebase Admin: inicializando con project_id='{FIREBASE_PROJECT_ID}' "
-            "(sin service account — solo verificación de tokens)"
+            f"Firebase Admin: inicializando sin credenciales explícitas "
+            "(solo válido si la máquina ya está autenticada con GCP/Firebase)"
         )
 
     try:
         if cred:
-            firebase_admin.initialize_app(cred, {"projectId": FIREBASE_PROJECT_ID})
+            firebase_admin.initialize_app(cred, options)
         else:
-            firebase_admin.initialize_app(options={"projectId": FIREBASE_PROJECT_ID})
+            firebase_admin.initialize_app(options=options)
     except ValueError:
         pass  # app ya existe
 
@@ -88,10 +102,9 @@ app.add_middleware(
 )
 
 # ─── Servicios ─────────────────────────────────────────────────────────────────
+# Seguimos usando STATIC_DIR y UPLOAD_DIR localmente de forma temporal, 
+# pero ya no servimos los archivos estáticos desde FastAPI.
 parser_service = PDFParserService(static_dir=STATIC_DIR, upload_dir=UPLOAD_DIR)
-
-# ─── Static files (imágenes extraídas) ────────────────────────────────────────
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

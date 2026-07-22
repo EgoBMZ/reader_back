@@ -3,6 +3,8 @@ import uuid
 import json
 import logging
 from typing import Dict, Any, List
+import urllib.parse
+from firebase_admin import storage
 import opendataloader_pdf
 
 from app.services.ocr_service import OCRService
@@ -121,11 +123,14 @@ class PDFParserService:
                     # Render page to an image (PNG)
                     pix = page.get_pixmap(dpi=150)
                     pix.save(cover_path)
-                    cover_url = f"/static/covers/{cover_filename}"
+                    
+                    # Upload cover to Firebase Storage
+                    storage_path = f"covers/{cover_filename}"
+                    cover_url = self._upload_to_firebase(cover_path, storage_path)
                 doc.close()
-                logger.info(f"Cover extracted successfully for task {task_id}: {cover_url}")
+                logger.info(f"Cover extracted and uploaded successfully for task {task_id}: {cover_url}")
             except Exception as cover_err:
-                logger.error(f"Error extracting PDF cover: {cover_err}")
+                logger.error(f"Error extracting/uploading PDF cover: {cover_err}")
 
             return {
                 "success": True,
@@ -142,33 +147,65 @@ class PDFParserService:
                 "error": str(e)
             }
             
+    def _upload_to_firebase(self, local_path: str, storage_path: str) -> str:
+        """
+        Sube un archivo local a Firebase Storage y retorna su URL pública de descarga.
+        """
+        bucket = storage.bucket()
+        blob = bucket.blob(storage_path)
+        blob.upload_from_filename(local_path)
+        # Hacemos que sea legible (opcional si Firebase rules lo permiten, pero mejor usar el token)
+        blob.make_public()
+        
+        # Generar URL de descarga formato Firebase
+        encoded_path = urllib.parse.quote(blob.name, safe='')
+        download_url = f"https://firebasestorage.googleapis.com/v0/b/{bucket.name}/o/{encoded_path}?alt=media"
+        return download_url
+
     def _process_extracted_data(self, data: Any, task_id: str) -> Any:
         """
         Post-processes the JSON structure, changing absolute/local image filesystem paths
-        to public URL paths.
+        to public Firebase Storage URL paths.
         """
         # If it's a list, process each element
         if isinstance(data, list):
             for item in data:
                 if isinstance(item, dict):
                     # Check if this item is an image or contains an image reference
-                    # Depending on OpenDataLoader's schema, it could have fields like 'image_path', 'src', etc.
-                    # We look for common patterns or fields that match file paths
                     for key in ["image_path", "src", "path", "source"]:
                         if key in item and isinstance(item[key], str):
                             val = item[key]
-                            # If it points to our local image directory, rewrite it to static web URL
-                            if "images/" in val or task_id in val or os.path.basename(val) in os.listdir(os.path.join(self.static_dir, "images", task_id)):
-                                filename = os.path.basename(val)
-                                item[key] = f"/static/images/{task_id}/{filename}"
+                            # If it points to our local image directory
+                            local_images_dir = os.path.join(self.static_dir, "images", task_id)
+                            filename = os.path.basename(val)
+                            local_path = os.path.join(local_images_dir, filename)
+                            
+                            if ("images/" in val or task_id in val) and os.path.exists(local_path):
+                                storage_path = f"images/{task_id}/{filename}"
+                                try:
+                                    firebase_url = self._upload_to_firebase(local_path, storage_path)
+                                    item[key] = firebase_url
+                                except Exception as e:
+                                    logger.error(f"Error subiendo imagen {filename} a Firebase: {e}")
+                                    # Fallback (aunque en Render se romperá, mejor dejar vacío o local)
+                                    item[key] = f"/static/images/{task_id}/{filename}"
             return data
             
-        # If it's a dict (e.g. metadata or document container), traverse recursively
+        # If it's a dict, traverse recursively
         elif isinstance(data, dict):
             for k, v in data.items():
                 if k in ["image_path", "src", "path", "source"] and isinstance(v, str):
                     filename = os.path.basename(v)
-                    data[k] = f"/static/images/{task_id}/{filename}"
+                    local_images_dir = os.path.join(self.static_dir, "images", task_id)
+                    local_path = os.path.join(local_images_dir, filename)
+                    
+                    if os.path.exists(local_path):
+                        storage_path = f"images/{task_id}/{filename}"
+                        try:
+                            data[k] = self._upload_to_firebase(local_path, storage_path)
+                        except Exception as e:
+                            logger.error(f"Error subiendo imagen {filename} a Firebase: {e}")
+                            data[k] = f"/static/images/{task_id}/{filename}"
                 else:
                     data[k] = self._process_extracted_data(v, task_id)
             return data

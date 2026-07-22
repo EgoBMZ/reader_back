@@ -1,0 +1,10 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+app/reader.db
+app/static
+app/uploads
+.env
+.DS_Store

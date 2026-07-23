@@ -18,6 +18,8 @@ COPY . .
 
 # Exponer el puerto
 ENV PORT=8000
+# Limitar la memoria máxima de Java para evitar OOM kills en entornos con RAM limitada
+ENV JAVA_TOOL_OPTIONS="-Xmx300m"
 EXPOSE 8000
 
 # Iniciar la aplicación

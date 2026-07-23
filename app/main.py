@@ -162,7 +162,8 @@ async def extract_pdf(
     logger.info(f"[extract] Usuario {user.uid} ({user.email}) subiendo '{file.filename}'")
 
     # 2. Guardar temporalmente
-    temp_path = os.path.join(UPLOAD_DIR, f"temp_{user.uid}_{file.filename}")
+    safe_filename = file.filename.replace(" ", "_")
+    temp_path = os.path.join(UPLOAD_DIR, f"temp_{user.uid}_{safe_filename}")
     try:
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)

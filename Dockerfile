@@ -17,10 +17,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Exponer el puerto
-ENV PORT=8000
+ENV PORT=8080
 # Limitar la memoria máxima de Java para evitar OOM kills en entornos con RAM limitada
-ENV JAVA_TOOL_OPTIONS="-Xmx300m"
-EXPOSE 8000
+ENV JAVA_TOOL_OPTIONS="-Xmx800m"
+EXPOSE 8080
 
 # Iniciar la aplicación
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

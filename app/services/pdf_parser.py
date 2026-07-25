@@ -28,14 +28,14 @@ class PDFParserService:
         os.makedirs(self.static_dir, exist_ok=True)
         os.makedirs(self.upload_dir, exist_ok=True)
         
-    def parse(self, pdf_file_path: str) -> Dict[str, Any]:
+    def parse(self, pdf_file_path: str, task_id: str = None) -> Dict[str, Any]:
         """
         Parses a PDF using OpenDataLoader, extracting text structure, layouts, tables, and images.
         
         Returns:
             A dictionary containing the parsed JSON structure with mapped image URLs.
         """
-        task_id = str(uuid.uuid4())
+        task_id = task_id or str(uuid.uuid4())
         
         # Create output directories for JSON and images
         task_json_dir = os.path.join(self.upload_dir, task_id)

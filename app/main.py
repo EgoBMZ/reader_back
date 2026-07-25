@@ -4,13 +4,14 @@ import logging
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, File, HTTPException, status, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, status, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
+import uuid
 
 from app.services.pdf_parser import PDFParserService
 from app.firebase_auth import get_current_user, FirebaseUser
@@ -111,6 +112,45 @@ parser_service = PDFParserService(static_dir=STATIC_DIR, upload_dir=UPLOAD_DIR)
 # ENDPOINTS PÚBLICOS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def process_pdf_background(task_id: str, temp_path: str, user_uid: str):
+    logger.info(f"[background] Iniciando procesamiento para tarea {task_id}")
+    db = firestore.client()
+    task_ref = db.collection("tasks").document(task_id)
+    
+    try:
+        # Llamar al parser original
+        result = parser_service.parse(temp_path, task_id=task_id)
+        
+        if result.get("success"):
+            logger.info(f"[background] Tarea {task_id} completada exitosamente.")
+            task_ref.update({
+                "status": "completed",
+                "result": result,
+                "updatedAt": firestore.SERVER_TIMESTAMP
+            })
+        else:
+            error_msg = result.get("error", "Error desconocido durante el procesamiento del PDF.")
+            logger.error(f"[background] Tarea {task_id} fallida: {error_msg}")
+            task_ref.update({
+                "status": "error",
+                "error": error_msg,
+                "updatedAt": firestore.SERVER_TIMESTAMP
+            })
+    except Exception as e:
+        logger.exception(f"[background] Excepción en tarea {task_id}: {e}")
+        task_ref.update({
+            "status": "error",
+            "error": str(e),
+            "updatedAt": firestore.SERVER_TIMESTAMP
+        })
+    finally:
+        # Limpiar archivo temporal
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception as e:
+                logger.warning(f"[background] No se pudo borrar el archivo temporal {temp_path}: {e}")
+
 @app.get("/", tags=["General"])
 async def root():
     return {
@@ -138,32 +178,25 @@ async def health():
 
 @app.post("/api/extract", tags=["PDF Processing"])
 async def extract_pdf(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user: FirebaseUser = Depends(get_current_user),
 ):
     """
-    Sube un PDF para procesar su estructura.
-
-    **Requiere autenticación**: incluye el Firebase ID Token en el header:
-    ```
-    Authorization: Bearer <token>
-    ```
-
-    Retorna un JSON estructurado con el contenido del libro (elementos, jerarquía, etc.)
-    listo para guardarse en Firestore.
+    Sube un PDF para procesar su estructura de manera asíncrona.
     """
-    # 1. Validar extensión
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Solo se aceptan archivos PDF.",
         )
 
-    logger.info(f"[extract] Usuario {user.uid} ({user.email}) subiendo '{file.filename}'")
+    task_id = str(uuid.uuid4())
+    logger.info(f"[extract] Usuario {user.uid} subiendo '{file.filename}'. Task ID: {task_id}")
 
-    # 2. Guardar temporalmente
+    # Guardar temporalmente
     safe_filename = file.filename.replace(" ", "_")
-    temp_path = os.path.join(UPLOAD_DIR, f"temp_{user.uid}_{safe_filename}")
+    temp_path = os.path.join(UPLOAD_DIR, f"temp_{task_id}_{safe_filename}")
     try:
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
@@ -171,28 +204,39 @@ async def extract_pdf(
         logger.error(f"[extract] Error guardando archivo temporal: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"No se pudo guardar el archivo: {e}",
+            detail=f"No se pudo guardar el archivo temporal: {e}",
         )
 
-    # 3. Parsear PDF
-    from fastapi.concurrency import run_in_threadpool
+    # Registrar la tarea en Firestore
     try:
-        result = await run_in_threadpool(parser_service.parse, temp_path)
-        if not result.get("success"):
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=result.get("error", "Error desconocido durante el procesamiento del PDF."),
-            )
-        logger.info(f"[extract] PDF procesado exitosamente para usuario {user.uid}")
-        return JSONResponse(content=result)
-
-    finally:
-        # 4. Limpiar archivo temporal
+        db = firestore.client()
+        db.collection("tasks").document(task_id).set({
+            "status": "processing",
+            "userId": user.uid,
+            "filename": file.filename,
+            "createdAt": firestore.SERVER_TIMESTAMP,
+            "updatedAt": firestore.SERVER_TIMESTAMP
+        })
+    except Exception as e:
+        logger.error(f"[extract] Error creando documento en Firestore: {e}")
+        # Intentar limpiar
         if os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except Exception as e:
-                logger.warning(f"[extract] No se pudo borrar el archivo temporal {temp_path}: {e}")
+            os.remove(temp_path)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error conectando a la base de datos.",
+        )
+
+    # Añadir a las tareas en segundo plano
+    background_tasks.add_task(process_pdf_background, task_id, temp_path, user.uid)
+
+    # Retornar inmediatamente
+    return JSONResponse(content={
+        "success": True,
+        "task_id": task_id,
+        "status": "processing",
+        "message": "Documento recibido, procesando en segundo plano..."
+    })
 
 
 if __name__ == "__main__":
